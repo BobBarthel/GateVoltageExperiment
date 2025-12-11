@@ -8,6 +8,11 @@ try:
 except ImportError:  # Windows
     termios = None
     tty = None
+
+try:
+    import msvcrt  # type: ignore
+except ImportError:
+    msvcrt = None
 from typing import Sequence
 
 from config import ExperimentOptions, GateSourceSettings, InstrumentSettings, parse_voltage_list
@@ -82,6 +87,19 @@ def clear_screen() -> None:
 
 def read_key() -> str:
     """Read a single key (handles arrow keys); falls back to input when not a TTY."""
+    # Windows: use msvcrt for key reads to support arrows without blocking stdin.
+    if msvcrt:
+        first = msvcrt.getch()
+        if first in (b"\x00", b"\xe0"):
+            second = msvcrt.getch()
+            code = second.decode("ascii", errors="ignore")
+            mapping = {"H": "ESC[A", "P": "ESC[B", "K": "ESC[D", "M": "ESC[C"}
+            return mapping.get(code, code)
+        try:
+            return first.decode("ascii")
+        except Exception:
+            return ""
+
     if not sys.stdin.isatty() or termios is None or tty is None:
         return input()
     fd = sys.stdin.fileno()
