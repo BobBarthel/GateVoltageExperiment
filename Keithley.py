@@ -204,7 +204,7 @@ class Keithley2450GateSource:
                 except Exception as exc:  # noqa: BLE001
                     print(COL.wrap(f"Gate source read during shutdown failed: {exc}", COL.yellow))
                     break
-                if abs(v) < 1e-6:
+                if abs(v) < 0.1:
                     break
                 if time.time() - start > 5.0:
                     print(COL.wrap(f"Gate source did not reach 0 V after 5s (last {v:.4g} V); proceeding.", COL.yellow))

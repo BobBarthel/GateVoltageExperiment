@@ -108,6 +108,8 @@ def print_run_options(
     gate_settings: GateSourceSettings,
     run_label: str,
     output_dir: str,
+    status_server_url: str | None = None,
+    status_password_set: bool = False,
 ) -> None:
     """Print current measurement options so the user sees them even on errors."""
     header = COL.wrap("=== Current measurement setup ===", COL.blue + COL.bold)
@@ -138,6 +140,10 @@ def print_run_options(
         f"NPLC={gate_settings.nplc} current_range={gate_current} "
         f"settle_tol={gate_settings.settle_tolerance_v} V"
     )
+    status_label = status_server_url or "(disabled)"
+    if status_password_set:
+        status_label = f"{status_label} (auth set)"
+    print(f"Status push:        {status_label}")
     print(COL.wrap("===============================", COL.blue))
 
 
@@ -210,6 +216,22 @@ def settings_dashboard(
             "label": "Output directory",
             "getter": lambda: run_config.get("output_dir", ""),
             "setter": lambda: run_config.__setitem__("output_dir", prompt("Output directory", str, run_config.get("output_dir", ""))),
+        },
+        {
+            "kind": "field",
+            "label": "Status server URL",
+            "getter": lambda: run_config.get("status_server_url", "") or "(disabled)",
+            "setter": lambda: run_config.__setitem__(
+                "status_server_url", prompt("Status server URL (blank to disable)", str, run_config.get("status_server_url", ""))
+            ),
+        },
+        {
+            "kind": "field",
+            "label": "Status password",
+            "getter": lambda: "***" if run_config.get("status_password") else "(not set)",
+            "setter": lambda: run_config.__setitem__(
+                "status_password", prompt("Status password", str, run_config.get("status_password", ""))
+            ),
         },
         {"kind": "section", "label": "Zurich Instrument Settings"},
         {

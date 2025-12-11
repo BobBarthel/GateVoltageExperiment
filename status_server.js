@@ -1,14 +1,14 @@
 // Minimal status server for sweep updates.
-const http = require('http');
+const http = require("http");
 
-const PORT = process.env.PORT || 3000;
-const API_PASSWORD = process.env.STATUS_PASSWORD || 'CHANGE_ME_PASSWORD';
+const PORT = process.env.PORT || 6969;
+const API_PASSWORD = process.env.STATUS_PASSWORD || "CHANGE_ME_PASSWORD";
 
 const state = {
-  currentVoltage: '-',
-  timeLeft: '-',
-  step: '-',
-  totalSteps: '-',
+  currentVoltage: "-",
+  timeLeft: "-",
+  step: "-",
+  totalSteps: "-",
   lastUpdated: null,
 };
 
@@ -93,29 +93,32 @@ const htmlPage = `<!doctype html>
 
 function sendJson(res, statusCode, payload) {
   const data = JSON.stringify(payload);
-  res.writeHead(statusCode, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) });
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(data),
+  });
   res.end(data);
 }
 
 function unauthorized(res) {
-  sendJson(res, 401, { error: 'Unauthorized' });
+  sendJson(res, 401, { error: "Unauthorized" });
 }
 
 function notFound(res) {
-  sendJson(res, 404, { error: 'Not found' });
+  sendJson(res, 404, { error: "Not found" });
 }
 
 function handleUpdate(req, res) {
-  const authHeader = req.headers['authorization'] || '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const authHeader = req.headers["authorization"] || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
   if (token !== API_PASSWORD) return unauthorized(res);
 
-  let body = '';
-  req.on('data', chunk => {
+  let body = "";
+  req.on("data", (chunk) => {
     body += chunk;
     if (body.length > 1e6) req.destroy(); // avoid large bodies
   });
-  req.on('end', () => {
+  req.on("end", () => {
     try {
       const payload = body ? JSON.parse(body) : {};
       state.currentVoltage = payload.currentVoltage ?? state.currentVoltage;
@@ -125,22 +128,22 @@ function handleUpdate(req, res) {
       state.lastUpdated = new Date().toISOString();
       sendJson(res, 200, { ok: true, updated: state });
     } catch (err) {
-      sendJson(res, 400, { error: 'Invalid JSON payload' });
+      sendJson(res, 400, { error: "Invalid JSON payload" });
     }
   });
 }
 
 const server = http.createServer((req, res) => {
-  if (req.method === 'GET' && req.url === '/') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  if (req.method === "GET" && req.url === "/") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     return res.end(htmlPage);
   }
 
-  if (req.method === 'GET' && req.url === '/status') {
+  if (req.method === "GET" && req.url === "/status") {
     return sendJson(res, 200, state);
   }
 
-  if (req.method === 'POST' && req.url === '/update') {
+  if (req.method === "POST" && req.url === "/update") {
     return handleUpdate(req, res);
   }
 

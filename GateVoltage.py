@@ -18,6 +18,9 @@ import json
 from dataclasses import asdict
 import time
 from typing import Dict, List, Sequence
+import urllib.error
+import urllib.request
+import urllib.parse
 
 from config import ExperimentOptions, GateSourceSettings, InstrumentSettings, parse_voltage_list
 from Keithley import Keithley2450GateSource, choose_visa_resource, list_visa_resources
@@ -40,6 +43,7 @@ def voltage_list_arg(raw: str) -> List[float]:
 
 
 SETTINGS_FILE = Path("gate_settings.json")
+STATUS_PUSH_TIMEOUT_S = 2.0
 
 
 def load_saved_state() -> dict:
@@ -58,6 +62,8 @@ def save_state(
     gate: GateSourceSettings,
     run_label: str,
     output_dir: str,
+    status_server_url: str,
+    status_password: str,
 ) -> None:
     data = {
         "options": asdict(options),
@@ -65,6 +71,8 @@ def save_state(
         "gate": asdict(gate),
         "run_label": run_label,
         "output_dir": output_dir,
+        "status_server_url": status_server_url,
+        "status_password": status_password,
     }
     try:
         with open(SETTINGS_FILE, "w") as fh:
@@ -73,12 +81,39 @@ def save_state(
         pass
 
 
+def push_status_update(url: str | None, password: str | None, payload: Dict[str, object]) -> None:
+    """POST the latest sweep status to the Node dashboard; errors are ignored."""
+    if not url:
+        return
+    parsed = urllib.parse.urlparse(url if "://" in url else f"http://{url}")
+    if not parsed.scheme or not parsed.netloc:
+        return
+    target = parsed.geturl().rstrip("/")
+    if not target.endswith("/update"):
+        target = f"{target}/update"
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Content-Length": str(len(body)),
+    }
+    if password:
+        headers["Authorization"] = f"Bearer {password}"
+    request = urllib.request.Request(target, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=STATUS_PUSH_TIMEOUT_S):
+            return
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        return
+
+
 def build_parser(
     default_settings: InstrumentSettings,
     default_options: ExperimentOptions,
     default_run_label: str,
     default_output_dir: str,
     default_gate: GateSourceSettings,
+    default_status_url: str,
+    default_status_password: str,
 ) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Gate voltage sweeps with Zurich Instruments.")
     parser.add_argument(
@@ -173,6 +208,18 @@ def build_parser(
         default=default_gate.settle_tolerance_v,
         help="Voltage tolerance (V) before starting sweeps.",
     )
+    parser.add_argument(
+        "--status-server-url",
+        type=str,
+        default=default_status_url,
+        help="Base URL of the status server (e.g. http://localhost:3000). Leave blank to disable.",
+    )
+    parser.add_argument(
+        "--status-server-password",
+        type=str,
+        default=default_status_password,
+        help="Bearer token for the status server.",
+    )
 
     parser.set_defaults(
         single_sweep=default_options.single_sweep,
@@ -193,8 +240,19 @@ def run_single_sweep_at_voltage(
     run_id: str,
     gate_source: Keithley2450GateSource | None,
     gate_settings: GateSourceSettings,
+    status_config: Dict[str, str] | None,
 ) -> None:
     set_gate_voltage(voltage, gate_source, tolerance_v=gate_settings.settle_tolerance_v)
+    push_status_update(
+        status_config.get("url") if status_config else None,
+        status_config.get("password") if status_config else None,
+        {
+            "currentVoltage": f"{voltage:g} V",
+            "timeLeft": format_seconds(0.0),
+            "step": 1,
+            "totalSteps": 1,
+        },
+    )
     sweep_data = stream_impedance_sweep(
         daq,
         plotter,
@@ -240,11 +298,28 @@ def run_voltage_block(
     run_id: str,
     gate_source: Keithley2450GateSource | None,
     gate_settings: GateSourceSettings,
+    status_config: Dict[str, str] | None,
 ) -> Dict[str, List[float]] | None:
     set_gate_voltage(voltage, gate_source, tolerance_v=gate_settings.settle_tolerance_v)
     start = time.time()
     sweep_count = 0
     latest_data = prev_data
+
+    def send_status(time_left_val: float) -> None:
+        if not status_config:
+            return
+        push_status_update(
+            status_config.get("url"),
+            status_config.get("password"),
+            {
+                "currentVoltage": f"{voltage:g} V",
+                "timeLeft": format_seconds(max(0.0, time_left_val)),
+                "step": step_index + 1,
+                "totalSteps": total_steps,
+            },
+        )
+
+    send_status(voltage_time_s)
 
     while True:
         elapsed = time.time() - start
@@ -297,7 +372,9 @@ def run_voltage_block(
             end="\r",
             flush=True,
         )
+        send_status(time_left)
     print()
+    send_status(0.0)
     return latest_data
 
 
@@ -340,6 +417,8 @@ def main() -> None:
 
     default_run_label = saved.get("run_label", "run")
     default_output_dir = saved.get("output_dir", "sweeps")
+    default_status_url = saved.get("status_server_url", "")
+    default_status_password = saved.get("status_password", "")
 
     parser = build_parser(
         default_settings,
@@ -347,6 +426,8 @@ def main() -> None:
         default_run_label,
         default_output_dir,
         default_gate,
+        default_status_url,
+        default_status_password,
     )
     args = parser.parse_args()
 
@@ -387,6 +468,8 @@ def main() -> None:
     )
 
     run_config = {"run_label": args.run_label, "output_dir": args.output_dir}
+    run_config["status_server_url"] = args.status_server_url
+    run_config["status_password"] = args.status_server_password
 
     status_msg = None
     while True:
@@ -396,7 +479,15 @@ def main() -> None:
         status_msg = None
 
         if action == "quit":
-            save_state(options, settings, gate_settings, run_config["run_label"], run_config["output_dir"])
+            save_state(
+                options,
+                settings,
+                gate_settings,
+                run_config["run_label"],
+                run_config["output_dir"],
+                run_config.get("status_server_url", ""),
+                run_config.get("status_password", ""),
+            )
             break
         if action == "reset":
             settings = InstrumentSettings.reset_to_defaults()
@@ -434,7 +525,16 @@ def main() -> None:
             else:
                 print(f"Reusing existing folder: {run_output_dir}")
 
-        print_run_options(options, order, settings, gate_settings, run_config["run_label"], str(run_output_dir))
+        print_run_options(
+            options,
+            order,
+            settings,
+            gate_settings,
+            run_config["run_label"],
+            str(run_output_dir),
+            status_server_url=run_config.get("status_server_url", ""),
+            status_password_set=bool(run_config.get("status_password")),
+        )
         options.single_sweep = action == "single"
 
         gate_source: Keithley2450GateSource | None = None
@@ -465,6 +565,7 @@ def main() -> None:
             "alternate_with_zero": options.alternate_with_zero,
             "gate_settle_tolerance_v": gate_settings.settle_tolerance_v,
         }
+        status_config = {"url": run_config.get("status_server_url"), "password": run_config.get("status_password")}
 
         try:
             if options.single_sweep:
@@ -479,6 +580,7 @@ def main() -> None:
                     run_id,
                     gate_source,
                     gate_settings,
+                    status_config,
                 )
                 status_msg = COL.wrap("Single sweep finished.", COL.green)
             else:
@@ -498,6 +600,7 @@ def main() -> None:
                         run_id=run_id,
                         gate_source=gate_source,
                         gate_settings=gate_settings,
+                        status_config={"url": run_config.get("status_server_url"), "password": run_config.get("status_password")},
                     )
                 status_msg = COL.wrap("All voltage sweeps completed.", COL.green)
         except KeyboardInterrupt:
@@ -512,7 +615,15 @@ def main() -> None:
                 print(COL.wrap(f"Gate source shutdown issue: {exc}", COL.yellow))
 
         options.single_sweep = False
-        save_state(options, settings, gate_settings, run_config["run_label"], run_config["output_dir"])
+        save_state(
+            options,
+            settings,
+            gate_settings,
+            run_config["run_label"],
+            run_config["output_dir"],
+            run_config.get("status_server_url", ""),
+            run_config.get("status_password", ""),
+        )
 
 
 if __name__ == "__main__":
