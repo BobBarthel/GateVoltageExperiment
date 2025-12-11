@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import sys
-import termios
 import time
-import tty
+try:
+    import termios
+    import tty
+except ImportError:  # Windows
+    termios = None
+    tty = None
 from typing import Sequence
 
 from config import ExperimentOptions, GateSourceSettings, InstrumentSettings, parse_voltage_list
@@ -78,7 +82,7 @@ def clear_screen() -> None:
 
 def read_key() -> str:
     """Read a single key (handles arrow keys); falls back to input when not a TTY."""
-    if not sys.stdin.isatty():
+    if not sys.stdin.isatty() or termios is None or tty is None:
         return input()
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
