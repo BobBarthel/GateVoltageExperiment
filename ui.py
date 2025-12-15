@@ -537,7 +537,7 @@ def settings_dashboard(
             print(header_art)
             render_header_meta()
         if est_steps > 0:
-            render_line(f"Estimated total time: {_format_duration(est_seconds)} ({est_steps} steps)")
+            render_line(f"Estimated total time: {COL.wrap(_format_duration(est_seconds), COL.bold)} ({est_steps} steps)")
         render_full_bar()
         render_line()
         render_line(
