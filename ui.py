@@ -38,8 +38,8 @@ class Colors:
 
 COL = Colors()
 HEADER_ART = None
-UI_VERSION = "v0.0.1"
-UI_VERSION_DATE = "2025-12-12"  # set manually to match the build/version date
+UI_VERSION = "v0.0.2"
+UI_VERSION_DATE = "2025-12-15"  # set manually to match the build/version date
 SIDE_PAD = 20  # spaces (~2 tabs) to inset content from both sides
 
 
@@ -50,6 +50,46 @@ def _visible_len(text: str) -> int:
 
 def _strip_ansi(text: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def _format_duration(seconds: float) -> str:
+    total = int(round(max(0, seconds)))
+    hrs = total // 3600
+    mins = (total % 3600) // 60
+    secs = total % 60
+    if hrs:
+        return f"{hrs}h {mins:02d}m"
+    return f"{mins:02d}m {secs:02d}s"
+
+
+def _estimate_steps_and_time(options: ExperimentOptions) -> tuple[int, float]:
+    """Estimate total steps and seconds based on options."""
+    volt_count = len(options.voltages)
+    reps = max(0, int(options.repetitions))
+    if volt_count == 0 or reps == 0:
+        return 0, 0.0
+    if options.alternate_with_zero:
+        steps = 2 * volt_count * reps + 1
+    else:
+        steps = volt_count * reps
+    total_seconds = steps * options.voltage_time_min * 60.0
+    return steps, total_seconds
+
+
+def _highlight_hotkeys(chunks: list[str]) -> str:
+    """
+    Build a string where plain text is blue+bold and hotkeys are yellow+bold.
+    Provide chunks alternating as [plain, hotkey, plain, hotkey, ...].
+    """
+    out = []
+    is_hotkey = False
+    for part in chunks:
+        if is_hotkey:
+            out.append(COL.wrap(part, COL.yellow + COL.bold))
+        else:
+            out.append(COL.wrap(part, COL.blue + COL.bold))
+        is_hotkey = not is_hotkey
+    return "".join(out)
 
 
 def _header_bounds(lines: list[str]) -> tuple[int, int]:
@@ -429,6 +469,7 @@ def settings_dashboard(
         header_width = right_idx - left_idx + 1 if right_idx >= left_idx else 0
         base_indent = max(0, left_idx if right_idx >= left_idx else 0)
         content_width = max(0, header_width - 2 * SIDE_PAD) if header_width > 0 else 0
+        est_steps, est_seconds = _estimate_steps_and_time(options)
 
         def render_header_meta() -> None:
             if header_width <= 0:
@@ -446,6 +487,12 @@ def settings_dashboard(
                 print(pad + text)
             else:
                 print(text)
+
+        def render_full_bar() -> None:
+            if header_width > 0:
+                print(" " * base_indent + "=" * header_width)
+            else:
+                print("=" * 65)
 
         def render_item(text: str, selected: bool, show_right_marker: bool = True) -> None:
             left_marker = "▶" if selected else ""
@@ -483,14 +530,35 @@ def settings_dashboard(
                 suffix = f" {right_marker}" if selected and show_right_marker else ""
                 prefix = f"{left_marker}" if selected else ""
                 print(f"{prefix}{text}{suffix}")
-
+        render_line()
+        render_full_bar()
         if header_art:
+            render_line()
             print(header_art)
             render_header_meta()
-        render_line(COL.wrap("Settings (↑/↓ or j/k, Enter to edit/run)", COL.blue + COL.bold))
+        if est_steps > 0:
+            render_line(f"Estimated total time: {_format_duration(est_seconds)} ({est_steps} steps)")
+        render_full_bar()
+        render_line()
+        render_line(
+            _highlight_hotkeys(
+                [
+                    "Settings (",
+                    "↑/↓",
+                    " or ",
+                    "j/k",
+                    " to navigate, ",
+                    "Enter",
+                    " to edit/run, ", 
+                    "q",
+                    " to quit)",
+                ]
+            )
+        )
         if status_msg:
             render_line(COL.wrap(status_msg, COL.yellow))
         render_line()
+        
 
         for i, entry in enumerate(entries):
             kind = entry["kind"]
@@ -506,6 +574,8 @@ def settings_dashboard(
             if i == idx:
                 text = COL.wrap(text, COL.green)
             render_item(text, selected=i == idx, show_right_marker=(kind != "action"))
+        render_line()
+        render_full_bar()
 
         key = read_key()
         if key in ("ESC[A", "k"):
@@ -520,3 +590,4 @@ def settings_dashboard(
                 return options, settings, gate_settings, run_config, entry["action"]
         elif key in ("q", "\x1b"):
             return options, settings, gate_settings, run_config, "quit"
+        
