@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
+import re
 try:
     import termios
     import tty
@@ -35,6 +37,58 @@ class Colors:
 
 
 COL = Colors()
+HEADER_ART = None
+UI_VERSION = "v0.0.1"
+UI_VERSION_DATE = "2025-12-12"  # set manually to match the build/version date
+SIDE_PAD = 20  # spaces (~2 tabs) to inset content from both sides
+
+
+def _visible_len(text: str) -> int:
+    """Return printable length by removing ANSI codes."""
+    return len(re.sub(r"\x1b\[[0-9;]*m", "", text))
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def _header_bounds(lines: list[str]) -> tuple[int, int]:
+    """
+    Find the leftmost and rightmost non-space character positions (0-based)
+    across all lines (after stripping ANSI). Returns (left, right); if no
+    content exists, returns (0, -1).
+    """
+    left = float("inf")
+    right = -1
+    for line in lines:
+        clean = _strip_ansi(line).rstrip("\n")
+        if not clean.strip():
+            continue
+        first = len(clean) - len(clean.lstrip(" "))
+        last = len(clean.rstrip(" ")) - 1
+        left = min(left, first)
+        right = max(right, last)
+    if right < 0:
+        return 0, -1
+    return int(left), int(right)
+
+
+def _load_header_art() -> str:
+    global HEADER_ART
+    if HEADER_ART is not None:
+        return HEADER_ART
+    path = Path("header-img-ascii.txt")
+    if path.exists():
+        try:
+            raw = path.read_text(errors="ignore").rstrip("\n")
+            # Allow literal escape markers like "\x1b" or "\033" to become real ANSI codes.
+            raw = raw.replace("\\x1b", "\x1b").replace("\\033", "\x1b")
+            HEADER_ART = raw.rstrip()
+        except Exception:
+            HEADER_ART = ""
+    else:
+        HEADER_ART = ""
+    return HEADER_ART
 
 
 def _set_voltages(options: ExperimentOptions, prompt):
@@ -369,17 +423,81 @@ def settings_dashboard(
     idx = next_selectable(0, 1)
     while True:
         clear_screen()
-        print(COL.wrap("Settings (↑/↓ or j/k, Enter to edit/run)", COL.blue + COL.bold))
+        header_art = _load_header_art()
+        header_lines = header_art.splitlines()
+        left_idx, right_idx = _header_bounds(header_lines)
+        header_width = right_idx - left_idx + 1 if right_idx >= left_idx else 0
+        base_indent = max(0, left_idx if right_idx >= left_idx else 0)
+        content_width = max(0, header_width - 2 * SIDE_PAD) if header_width > 0 else 0
+
+        def render_header_meta() -> None:
+            if header_width <= 0:
+                return
+            left = UI_VERSION
+            right = UI_VERSION_DATE
+            inner_space = max(1, header_width - len(left) - len(right))
+            pad = " " * base_indent
+            print(f"{pad}{left}{' ' * inner_space}{right}")
+
+        def render_line(text: str = "") -> None:
+            plain_len = _visible_len(text)
+            if header_width > 0:
+                pad = " " * base_indent + " " * SIDE_PAD + " " * max(0, (content_width - plain_len) // 2)
+                print(pad + text)
+            else:
+                print(text)
+
+        def render_item(text: str, selected: bool, show_right_marker: bool = True) -> None:
+            left_marker = "▶" if selected else ""
+            right_marker = "◀" if selected and show_right_marker else ""
+            left_pad = " " * base_indent + " " * SIDE_PAD  # inset to center block visually
+            if header_width > 0:
+                marker_space = (1 if selected else 0) + (1 if selected and show_right_marker else 0)
+                width_for_content = max(0, content_width - marker_space)
+                if ":" in text:
+                    label, val = text.split(":", 1)
+                    label_part = f"{label.strip()}:"
+                    val_part = val.strip()
+                    label_len = _visible_len(label_part)
+                    val_len = _visible_len(val_part)
+                    space_len = width_for_content - label_len - val_len
+                    if space_len < 1:
+                        # If too tight, truncate value.
+                        max_val_len = max(0, width_for_content - label_len - 1)
+                        if max_val_len > 3 and val_len > max_val_len:
+                            val_part = val_part[: max_val_len - 3] + "..."
+                            val_len = _visible_len(val_part)
+                        space_len = max(1, width_for_content - label_len - val_len)
+                    content = f"{label_part}{' ' * space_len}{val_part}"
+                else:
+                    content = text
+                    visible_len = _visible_len(content)
+                    if visible_len > width_for_content and width_for_content > 3:
+                        content = content[: width_for_content - 3] + "..."
+                spaces = max(0, width_for_content - _visible_len(content))
+                if selected:
+                    print(f"{left_pad}{left_marker}{content}{' ' * spaces}{right_marker}")
+                else:
+                    print(f"{left_pad}{content}")
+            else:
+                suffix = f" {right_marker}" if selected and show_right_marker else ""
+                prefix = f"{left_marker}" if selected else ""
+                print(f"{prefix}{text}{suffix}")
+
+        if header_art:
+            print(header_art)
+            render_header_meta()
+        render_line(COL.wrap("Settings (↑/↓ or j/k, Enter to edit/run)", COL.blue + COL.bold))
         if status_msg:
-            print(COL.wrap(status_msg, COL.yellow))
-        print()
+            render_line(COL.wrap(status_msg, COL.yellow))
+        render_line()
 
         for i, entry in enumerate(entries):
             kind = entry["kind"]
             if kind == "section":
-                print(COL.wrap(f"[{entry['label']}]", COL.blue + COL.bold))
+                render_line()  # blank line before each section
+                render_line(COL.wrap(f"[{entry['label']}]", COL.blue + COL.bold))
                 continue
-            prefix = "➜ " if i == idx else "  "
             if kind == "field":
                 val = entry["getter"]()
                 text = f"{entry['label']}: {val}"
@@ -387,7 +505,7 @@ def settings_dashboard(
                 text = entry["label"]
             if i == idx:
                 text = COL.wrap(text, COL.green)
-            print(prefix + text)
+            render_item(text, selected=i == idx, show_right_marker=(kind != "action"))
 
         key = read_key()
         if key in ("ESC[A", "k"):
