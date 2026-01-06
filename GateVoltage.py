@@ -64,6 +64,14 @@ def _sanitize_series(values: object) -> object:
     return cleaned
 
 
+def _finite_prefix(real: List[float], imag: List[float]) -> int:
+    max_len = min(len(real), len(imag))
+    for idx in range(max_len):
+        if not math.isfinite(real[idx]) or not math.isfinite(imag[idx]):
+            return idx
+    return max_len
+
+
 def preview_live_plot(plotter: SweepPlotter, sweeps: int = 6, points: int = 60, pause_s: float = 0.2) -> None:
     prev_real: List[float] | None = None
     prev_imag: List[float] | None = None
@@ -411,9 +419,12 @@ def run_single_sweep_at_voltage(
         nonlocal last_push_len
         if not plots_enabled:
             return
-        if len(real) - last_push_len < 5:
+        available = _finite_prefix(real, imag)
+        if available - last_push_len < 5:
             return
-        last_push_len = len(real)
+        last_push_len = available
+        real = real[:available]
+        imag = imag[:available]
         print(f"[plot] streaming points={len(real)} id={sweep_id}")
         push_plot_update(
             status_config.get("url"),
@@ -531,9 +542,12 @@ def run_voltage_block(
             nonlocal last_push_len
             if not plots_enabled:
                 return
-            if len(real) - last_push_len < 5:
+            available = _finite_prefix(real, imag)
+            if available - last_push_len < 5:
                 return
-            last_push_len = len(real)
+            last_push_len = available
+            real = real[:available]
+            imag = imag[:available]
             print(f"[plot] streaming points={len(real)} id={sweep_id}")
             push_plot_update(
                 status_config.get("url"),
