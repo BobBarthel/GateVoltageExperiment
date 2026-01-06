@@ -188,9 +188,11 @@ def push_status_update(url: str | None, password: str | None, payload: Dict[str,
         headers["Authorization"] = f"Bearer {password}"
     request = urllib.request.Request(target, data=body, headers=headers, method="POST")
     try:
+        print(f"[status] POST {target} payload_keys={list(payload.keys())}")
         with urllib.request.urlopen(request, timeout=STATUS_PUSH_TIMEOUT_S):
             return
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        print(f"[status] POST failed to {target}")
         return
 
 
@@ -213,9 +215,14 @@ def push_plot_update(url: str | None, password: str | None, payload: Dict[str, o
         headers["Authorization"] = f"Bearer {password}"
     request = urllib.request.Request(target, data=body, headers=headers, method="POST")
     try:
+        print(
+            f"[plot] POST {target} id={payload.get('id')} session={payload.get('session')} "
+            f"points={len(payload.get('real', [])) if isinstance(payload.get('real'), list) else 'n/a'}"
+        )
         with urllib.request.urlopen(request, timeout=STATUS_PUSH_TIMEOUT_S):
             return
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        print(f"[plot] POST failed to {target}")
         return
 
 

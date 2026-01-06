@@ -289,6 +289,7 @@ function handleUpdate(req, res) {
   const authHeader = req.headers["authorization"] || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
   if (token !== API_PASSWORD) return unauthorized(res);
+  console.log("[status] /update request");
 
   let body = "";
   req.on("data", (chunk) => {
@@ -314,6 +315,7 @@ function handlePlotUpdate(req, res) {
   const authHeader = req.headers["authorization"] || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
   if (token !== API_PASSWORD) return unauthorized(res);
+  console.log("[plot] /plot_update request");
 
   let body = "";
   req.on("data", (chunk) => {
@@ -383,6 +385,7 @@ const server = http.createServer((req, res) => {
     const authHeader = req.headers["authorization"] || "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
     if (token !== API_PASSWORD) return unauthorized(res);
+    console.log("[plot] /plots-data request");
     return sendJson(res, 200, { session: state.plotSession, plots: state.plots });
   }
 
