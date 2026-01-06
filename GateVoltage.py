@@ -380,11 +380,33 @@ def run_single_sweep_at_voltage(
     )
     sweep_id = f"{run_id}_single"
     plots_enabled = bool(status_config and status_config.get("plots_enabled", True) and status_config.get("url"))
+    last_push = 0.0
+
+    def live_plot_cb(real: List[float], imag: List[float]) -> None:
+        nonlocal last_push
+        if not plots_enabled:
+            return
+        now = time.time()
+        if now - last_push < 0.5:
+            return
+        last_push = now
+        push_plot_update(
+            status_config.get("url"),
+            status_config.get("password"),
+            {
+                "session": run_id,
+                "id": sweep_id,
+                "label": f"Single sweep {voltage:g} V",
+                "real": real,
+                "imag": imag,
+            },
+        )
     sweep_data = stream_impedance_sweep(
         daq,
         plotter,
         prev_data=None,
         title_func=lambda: f"Single sweep at {voltage:g} V",
+        live_plot_cb=live_plot_cb if plots_enabled else None,
     )
     if not sweep_data:
         raise RuntimeError("No data returned from sweeper.")
@@ -479,11 +501,33 @@ def run_voltage_block(
             )
 
         sweep_id = f"{run_id}_step{step_index + 1}_sweep{sweep_count + 1}"
+        last_push = 0.0
+
+        def live_plot_cb(real: List[float], imag: List[float]) -> None:
+            nonlocal last_push
+            if not plots_enabled:
+                return
+            now = time.time()
+            if now - last_push < 0.5:
+                return
+            last_push = now
+            push_plot_update(
+                status_config.get("url"),
+                status_config.get("password"),
+                {
+                    "session": run_id,
+                    "id": sweep_id,
+                    "label": f"Step {step_index + 1}/{total_steps} sweep {sweep_count + 1} ({voltage:g} V)",
+                    "real": real,
+                    "imag": imag,
+                },
+            )
         sweep_data = stream_impedance_sweep(
             daq,
             plotter,
             prev_data=prev_data,
             title_func=title_func,
+            live_plot_cb=live_plot_cb if plots_enabled else None,
         )
         if not sweep_data:
             print("No data returned from sweeper; stopping this voltage step early.")
