@@ -147,6 +147,7 @@ def _slice_to_count(
         n = int(np.ravel(count_arr)[-1])
     except Exception:
         return realz, imagz
+    print(f"[debug] sweep progress count={n} total={realz.size}")
     if n <= 0:
         return realz[:0], imagz[:0]
     n = min(n, realz.size, imagz.size)
