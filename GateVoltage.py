@@ -13,9 +13,11 @@ Gate voltage orchestration for Zurich Instruments sweeps.
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 import json
 from dataclasses import asdict
+import random
 import time
 from typing import Dict, List, Sequence
 import urllib.error
@@ -46,6 +48,88 @@ SETTINGS_FILE = Path("gate_settings.json")
 STATUS_PUSH_TIMEOUT_S = 2.0
 
 
+def preview_live_plot(plotter: SweepPlotter, sweeps: int = 6, points: int = 60, pause_s: float = 0.2) -> None:
+    prev_real: List[float] | None = None
+    prev_imag: List[float] | None = None
+    points = max(2, points)
+    for idx in range(sweeps):
+        phase = idx * 0.6
+        center = 900.0 + idx * 30.0
+        radius = 500.0 + 40.0 * math.sin(phase)
+        theta = [i / (points - 1) * math.pi for i in range(points)]
+        real = [center + radius * math.cos(t) + random.uniform(-12.0, 12.0) for t in theta]
+        imag = [-(radius * (0.9 + 0.1 * math.cos(phase)) * math.sin(t)) + random.uniform(-12.0, 12.0) for t in theta]
+        plotter.update(
+            real,
+            imag,
+            prev_real,
+            prev_imag,
+            title=f"Preview sweep {idx + 1}/{sweeps} (fake data)",
+        )
+        prev_real = real
+        prev_imag = imag
+        plotter.pause(pause_s)
+        plotter.record_sweep(real, imag)
+
+
+class NullPlotter:
+    def update(
+        self,
+        real: Sequence[float],
+        imag: Sequence[float],
+        prev_real: Sequence[float] | None,
+        prev_imag: Sequence[float] | None,
+        title: str,
+    ) -> None:
+        return
+
+    def pause(self, seconds: float) -> None:
+        return
+
+    def record_sweep(self, real: Sequence[float], imag: Sequence[float]) -> None:
+        return
+
+
+def preview_server_plots(
+    status_config: Dict[str, str] | None,
+    sweeps: int = 6,
+    points: int = 60,
+    pause_s: float = 0.5,
+) -> None:
+    if not status_config or not status_config.get("plots_enabled", True):
+        return
+    points = max(2, points)
+    session_id = f"preview_{time.strftime('%Y%m%d-%H%M%S')}"
+    push_plot_session(
+        status_config.get("url") if status_config else None,
+        status_config.get("password") if status_config else None,
+        session_id,
+    )
+    for idx in range(sweeps):
+        phase = idx * 0.6
+        center = 900.0 + idx * 30.0
+        radius = 500.0 + 40.0 * math.sin(phase)
+        theta = [i / (points - 1) * math.pi for i in range(points)]
+        full_real = [center + radius * math.cos(t) + random.uniform(-12.0, 12.0) for t in theta]
+        full_imag = [-(radius * (0.9 + 0.1 * math.cos(phase)) * math.sin(t)) + random.uniform(-12.0, 12.0) for t in theta]
+        step_size = max(4, points // 6)
+        for end_idx in range(step_size, points + step_size, step_size):
+            real = full_real[: min(points, end_idx)]
+            imag = full_imag[: min(points, end_idx)]
+            push_plot_update(
+                status_config.get("url") if status_config else None,
+                status_config.get("password") if status_config else None,
+                {
+                    "session": session_id,
+                    "id": f"{session_id}_sweep{idx + 1}",
+                    "label": f"Preview sweep {idx + 1}/{sweeps}",
+                    "real": real,
+                    "imag": imag,
+                },
+            )
+            time.sleep(pause_s)
+
+
 def load_saved_state() -> dict:
     if SETTINGS_FILE.exists():
         try:
@@ -64,6 +148,8 @@ def save_state(
     output_dir: str,
     status_server_url: str,
     status_password: str,
+    enable_live_plot: bool,
+    enable_server_plots: bool,
 ) -> None:
     data = {
         "options": asdict(options),
@@ -73,6 +159,8 @@ def save_state(
         "output_dir": output_dir,
         "status_server_url": status_server_url,
         "status_password": status_password,
+        "enable_live_plot": enable_live_plot,
+        "enable_server_plots": enable_server_plots,
     }
     try:
         with open(SETTINGS_FILE, "w") as fh:
@@ -104,6 +192,36 @@ def push_status_update(url: str | None, password: str | None, payload: Dict[str,
             return
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
         return
+
+
+def push_plot_update(url: str | None, password: str | None, payload: Dict[str, object]) -> None:
+    """POST the latest sweep plot data to the Node dashboard; errors are ignored."""
+    if not url:
+        return
+    parsed = urllib.parse.urlparse(url if "://" in url else f"http://{url}")
+    if not parsed.scheme or not parsed.netloc:
+        return
+    target = parsed.geturl().rstrip("/")
+    if not target.endswith("/plot_update"):
+        target = f"{target}/plot_update"
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Content-Length": str(len(body)),
+    }
+    if password:
+        headers["Authorization"] = f"Bearer {password}"
+    request = urllib.request.Request(target, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=STATUS_PUSH_TIMEOUT_S):
+            return
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        return
+
+
+def push_plot_session(url: str | None, password: str | None, session_id: str) -> None:
+    payload = {"session": session_id, "real": [], "imag": [], "id": "session_start", "label": "session_start"}
+    push_plot_update(url, password, payload)
 
 
 def build_parser(
@@ -253,11 +371,36 @@ def run_single_sweep_at_voltage(
             "totalSteps": 1,
         },
     )
+    sweep_id = f"{run_id}_single"
+    last_push = 0.0
+    plots_enabled = bool(status_config and status_config.get("plots_enabled", True) and status_config.get("url"))
+
+    def live_plot_cb(real: List[float], imag: List[float]) -> None:
+        nonlocal last_push
+        if not plots_enabled:
+            return
+        now = time.time()
+        if now - last_push < 0.5:
+            return
+        last_push = now
+        push_plot_update(
+            status_config.get("url"),
+            status_config.get("password"),
+            {
+                "session": run_id,
+                "id": sweep_id,
+                "label": f"Single sweep {voltage:g} V",
+                "real": real,
+                "imag": imag,
+            },
+        )
+
     sweep_data = stream_impedance_sweep(
         daq,
         plotter,
         prev_data=None,
         title_func=lambda: f"Single sweep at {voltage:g} V",
+        live_plot_cb=live_plot_cb if plots_enabled else None,
     )
     if not sweep_data:
         raise RuntimeError("No data returned from sweeper.")
@@ -273,6 +416,18 @@ def run_single_sweep_at_voltage(
         sweep_settings=sweep_settings,
         run_id=run_id,
     )
+    if plots_enabled:
+        push_plot_update(
+            status_config.get("url") if status_config else None,
+            status_config.get("password") if status_config else None,
+            {
+                "session": run_id,
+                "id": sweep_id,
+                "label": f"Single sweep {voltage:g} V",
+                "real": sweep_data["Re_Z_Ohm"],
+                "imag": sweep_data["Im_Z_Ohm"],
+            },
+        )
     plotter.update(
         sweep_data["Re_Z_Ohm"],
         sweep_data["Im_Z_Ohm"],
@@ -280,6 +435,7 @@ def run_single_sweep_at_voltage(
         None,
         title=f"Single sweep at {voltage:g} V",
     )
+    plotter.record_sweep(sweep_data["Re_Z_Ohm"], sweep_data["Im_Z_Ohm"])
     print_order(order)
     print("Single sweep complete.")
 
@@ -304,6 +460,7 @@ def run_voltage_block(
     start = time.time()
     sweep_count = 0
     latest_data = prev_data
+    plots_enabled = bool(status_config and status_config.get("plots_enabled", True) and status_config.get("url"))
 
     def send_status(time_left_val: float) -> None:
         if not status_config:
@@ -337,11 +494,35 @@ def run_voltage_block(
                 f"Order pos {step_index + 1}"
             )
 
+        sweep_id = f"{run_id}_step{step_index + 1}_sweep{sweep_count + 1}"
+        last_push = 0.0
+
+        def live_plot_cb(real: List[float], imag: List[float]) -> None:
+            nonlocal last_push
+            if not plots_enabled:
+                return
+            now = time.time()
+            if now - last_push < 0.5:
+                return
+            last_push = now
+            push_plot_update(
+                status_config.get("url"),
+                status_config.get("password"),
+                {
+                    "session": run_id,
+                    "id": sweep_id,
+                    "label": f"Step {step_index + 1}/{total_steps} sweep {sweep_count + 1} ({voltage:g} V)",
+                    "real": real,
+                    "imag": imag,
+                },
+            )
+
         sweep_data = stream_impedance_sweep(
             daq,
             plotter,
             prev_data=prev_data,
             title_func=title_func,
+            live_plot_cb=live_plot_cb if plots_enabled else None,
         )
         if not sweep_data:
             print("No data returned from sweeper; stopping this voltage step early.")
@@ -360,6 +541,19 @@ def run_voltage_block(
             sweep_settings=sweep_settings,
             run_id=run_id,
         )
+        if plots_enabled:
+            push_plot_update(
+                status_config.get("url") if status_config else None,
+                status_config.get("password") if status_config else None,
+                {
+                    "session": run_id,
+                    "id": sweep_id,
+                    "label": f"Step {step_index + 1}/{total_steps} sweep {sweep_count} ({voltage:g} V)",
+                    "real": sweep_data["Re_Z_Ohm"],
+                    "imag": sweep_data["Im_Z_Ohm"],
+                },
+            )
+        plotter.record_sweep(sweep_data["Re_Z_Ohm"], sweep_data["Im_Z_Ohm"])
         latest_data = sweep_data
         prev_data = sweep_data
 
@@ -419,6 +613,8 @@ def main() -> None:
     default_output_dir = saved.get("output_dir", "sweeps")
     default_status_url = saved.get("status_server_url", "")
     default_status_password = saved.get("status_password", "")
+    default_enable_live_plot = saved.get("enable_live_plot", True)
+    default_enable_server_plots = saved.get("enable_server_plots", True)
 
     parser = build_parser(
         default_settings,
@@ -467,7 +663,12 @@ def main() -> None:
         settle_tolerance_v=args.gate_settle_tolerance,
     )
 
-    run_config = {"run_label": args.run_label, "output_dir": args.output_dir}
+    run_config = {
+        "run_label": args.run_label,
+        "output_dir": args.output_dir,
+        "enable_live_plot": default_enable_live_plot,
+        "enable_server_plots": default_enable_server_plots,
+    }
     run_config["status_server_url"] = args.status_server_url
     run_config["status_password"] = args.status_server_password
 
@@ -487,6 +688,8 @@ def main() -> None:
                 run_config["output_dir"],
                 run_config.get("status_server_url", ""),
                 run_config.get("status_password", ""),
+                bool(run_config.get("enable_live_plot", True)),
+                bool(run_config.get("enable_server_plots", True)),
             )
             break
         if action == "reset":
@@ -502,6 +705,26 @@ def main() -> None:
                     status_msg = COL.wrap("No VISA resources detected.", COL.red)
             except Exception as exc:
                 status_msg = COL.wrap(f"VISA query failed: {exc}", COL.red)
+            continue
+        if action == "preview":
+            if not run_config.get("enable_live_plot", True):
+                status_msg = COL.wrap("Live plot is disabled.", COL.yellow)
+                continue
+            plotter = SweepPlotter()
+            preview_live_plot(plotter)
+            status_msg = COL.wrap("Live plot preview complete.", COL.green)
+            continue
+        if action == "preview_server":
+            if not run_config.get("enable_server_plots", True):
+                status_msg = COL.wrap("Server plots are disabled.", COL.yellow)
+                continue
+            status_config = {
+                "url": run_config.get("status_server_url"),
+                "password": run_config.get("status_password"),
+                "plots_enabled": True,
+            }
+            preview_server_plots(status_config)
+            status_msg = COL.wrap("Server plot preview sent.", COL.green)
             continue
 
         try:
@@ -549,7 +772,7 @@ def main() -> None:
             status_msg = COL.wrap(f"Gate source error: {exc}", COL.red)
             continue
 
-        plotter = SweepPlotter()
+        plotter = SweepPlotter() if run_config.get("enable_live_plot", True) else NullPlotter()
         voltage_time_s = options.voltage_time_min * 60.0
         prev_data: Dict[str, List[float]] | None = None
         measurement_t0 = time.time()
@@ -566,6 +789,9 @@ def main() -> None:
             "gate_settle_tolerance_v": gate_settings.settle_tolerance_v,
         }
         status_config = {"url": run_config.get("status_server_url"), "password": run_config.get("status_password")}
+        status_config["plots_enabled"] = bool(run_config.get("enable_server_plots", True))
+        if status_config.get("url") and status_config.get("plots_enabled"):
+            push_plot_session(status_config.get("url"), status_config.get("password"), run_id)
 
         try:
             if options.single_sweep:
@@ -623,6 +849,8 @@ def main() -> None:
             run_config["output_dir"],
             run_config.get("status_server_url", ""),
             run_config.get("status_password", ""),
+            bool(run_config.get("enable_live_plot", True)),
+            bool(run_config.get("enable_server_plots", True)),
         )
 
 

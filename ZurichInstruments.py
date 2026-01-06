@@ -12,12 +12,7 @@ import os
 import time
 from typing import Dict, Optional, Tuple
 
-import matplotlib
-
-# Force an interactive backend if the default is non-interactive (e.g., Agg).
-if "agg" in matplotlib.get_backend().lower():
-    matplotlib.use("TkAgg")
-
+import plot_backend  # noqa: F401
 import matplotlib.pyplot as plt
 import numpy as np
 import zhinst.core
@@ -140,10 +135,8 @@ def extract_impedance_waves(
     else:
         print(f"Unsupported chunk type: {type(raw_chunk)}")
         return None
-    
-    # print(f"Chunk header: {chunk.get('header').get('changedtimestamp')[0]}")
 
-    # Case 3: flat dict fields (your chunk keys)
+    # flat dict fields (chunk keys)
     def _field(name: str) -> np.ndarray:
         arr = np.asarray(chunk.get(name, []), dtype=float)
         if arr.ndim > 1 and arr.shape[0] == 1:
@@ -154,7 +147,6 @@ def extract_impedance_waves(
     realz = _field("realz")
     imagz = _field("imagz")
     if freq.size and realz.size and imagz.size:
-        # print("case 3")
         return freq, realz, imagz
 
     print(f"No impedance waves parsed; chunk keys: {list(chunk.keys())}")

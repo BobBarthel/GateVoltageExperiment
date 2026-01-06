@@ -38,8 +38,8 @@ class Colors:
 
 COL = Colors()
 HEADER_ART = None
-UI_VERSION = "v0.0.2"
-UI_VERSION_DATE = "2025-12-15"  # set manually to match the build/version date
+UI_VERSION = "v0.0.3"
+UI_VERSION_DATE = "2026-01-06"  # set manually to match the build/version date
 SIDE_PAD = 20  # spaces (~2 tabs) to inset content from both sides
 
 
@@ -349,6 +349,22 @@ def settings_dashboard(
                 "status_password", prompt("Status password", str, run_config.get("status_password", ""))
             ),
         },
+        {
+            "kind": "field",
+            "label": "Enable live plot",
+            "getter": lambda: run_config.get("enable_live_plot", True),
+            "setter": lambda: run_config.__setitem__(
+                "enable_live_plot", prompt_bool("Enable live plot? (y/n)", run_config.get("enable_live_plot", True))
+            ),
+        },
+        {
+            "kind": "field",
+            "label": "Enable server plots",
+            "getter": lambda: run_config.get("enable_server_plots", True),
+            "setter": lambda: run_config.__setitem__(
+                "enable_server_plots", prompt_bool("Enable server plots? (y/n)", run_config.get("enable_server_plots", True))
+            ),
+        },
         {"kind": "section", "label": "Zurich Instrument Settings"},
         {
             "kind": "field",
@@ -448,6 +464,8 @@ def settings_dashboard(
         {"kind": "section", "label": "Actions"},
         {"kind": "action", "label": "Reset Zurich settings to defaults", "action": "reset"},
         {"kind": "action", "label": "List VISA resources", "action": "list_visa"},
+        {"kind": "action", "label": "Preview live plot (fake data)", "action": "preview"},
+        {"kind": "action", "label": "Preview server plots (fake data)", "action": "preview_server"},
         {"kind": "action", "label": "Start measurement", "action": "start"},
         {"kind": "action", "label": "Run single sweep test", "action": "single"},
         {"kind": "action", "label": "Quit", "action": "quit"},
