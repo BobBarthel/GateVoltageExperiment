@@ -187,7 +187,7 @@ def stream_impedance_sweep(
     latest: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, np.ndarray]]] = None
     stop_event = threading.Event()
     done_sentinel = object()
-    updates: queue.Queue[object] = queue.Queue(maxsize=1)
+    updates: queue.Queue[object] = queue.Queue()
 
     def publish(item: object) -> None:
         try:
@@ -223,17 +223,21 @@ def stream_impedance_sweep(
     thread = threading.Thread(target=reader, daemon=True)
     thread.start()
 
+    done = False
     while True:
         try:
             item = updates.get(timeout=0.05)
         except queue.Empty:
             plotter.pause(0.01)
-            if not thread.is_alive() and updates.empty():
+            if done and updates.empty():
                 break
             continue
 
         if item is done_sentinel:
-            break
+            done = True
+            if updates.empty():
+                break
+            continue
 
         freq, realz, imagz, timestamps, meta = item
         latest = (freq, realz, imagz, timestamps, meta)
