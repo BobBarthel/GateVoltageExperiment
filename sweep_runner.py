@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import queue
-import threading
 import time
 from typing import Callable, Dict, Optional, Tuple
 
@@ -175,7 +173,6 @@ def stream_impedance_sweep(
     plotter,
     prev_data: Optional[Dict[str, list[float]]],
     title_func: Callable[[], str],
-    live_plot_cb: Optional[Callable[[list[float], list[float]], None]] = None,
 ) -> Optional[Dict[str, list[float]]]:
     """
     Run one sweep while streaming updates to the live plot.
@@ -185,82 +182,42 @@ def stream_impedance_sweep(
     sweeper.execute()
 
     latest: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, np.ndarray]]] = None
-    stop_event = threading.Event()
-    done_sentinel = object()
-    updates: queue.Queue[object] = queue.Queue()
+    has_data = False
 
-    def publish(item: object) -> None:
-        try:
-            updates.put_nowait(item)
-        except queue.Full:
-            try:
-                updates.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                updates.put_nowait(item)
-            except queue.Full:
-                pass
+    while zi.progress_value(sweeper) < 1.0 and not sweeper.finished():
+        time.sleep(zi.PROGRESS_POLL_S)
+        result = sweeper.read(True)
+        parsed = _extract_chunk_with_meta(result)
+        if parsed:
+            chunk, freq, realz, imagz, timestamps, meta = parsed
+            latest = (freq, realz, imagz, timestamps, meta)
+            has_data = True
+            plotter.update(
+                realz.tolist(),
+                imagz.tolist(),
+                prev_data["Re_Z_Ohm"] if prev_data else None,
+                prev_data["Im_Z_Ohm"] if prev_data else None,
+                title=title_func(),
+            )
 
-    def reader() -> None:
-        try:
-            while zi.progress_value(sweeper) < 1.0 and not sweeper.finished() and not stop_event.is_set():
-                time.sleep(zi.PROGRESS_POLL_S)
-                result = sweeper.read(True)
-                parsed = _extract_chunk_with_meta(result)
-                if parsed:
-                    _, freq, realz, imagz, timestamps, meta = parsed
-                    publish((freq, realz, imagz, timestamps, meta))
-
-            result = sweeper.read(True)
-            parsed = _extract_chunk_with_meta(result)
-            if parsed:
-                _, freq, realz, imagz, timestamps, meta = parsed
-                publish((freq, realz, imagz, timestamps, meta))
-        finally:
-            publish(done_sentinel)
-
-    thread = threading.Thread(target=reader, daemon=True)
-    thread.start()
-
-    done = False
-    while True:
-        try:
-            item = updates.get(timeout=0.05)
-        except queue.Empty:
-            plotter.pause(0.01)
-            if done and updates.empty():
-                break
-            continue
-
-        if item is done_sentinel:
-            done = True
-            if updates.empty():
-                break
-            continue
-
-        freq, realz, imagz, timestamps, meta = item
+    result = sweeper.read(True)
+    parsed = _extract_chunk_with_meta(result)
+    if parsed:
+        _, freq, realz, imagz, timestamps, meta = parsed
         latest = (freq, realz, imagz, timestamps, meta)
-        real_list = realz.tolist()
-        imag_list = imagz.tolist()
+        has_data = True
         plotter.update(
-            real_list,
-            imag_list,
+            realz.tolist(),
+            imagz.tolist(),
             prev_data["Re_Z_Ohm"] if prev_data else None,
             prev_data["Im_Z_Ohm"] if prev_data else None,
             title=title_func(),
         )
-        if live_plot_cb:
-            live_plot_cb(real_list, imag_list)
-        plotter.pause(0.001)
 
     sweeper.finish()
     sweeper.unsubscribe("*")
 
-    stop_event.set()
-    thread.join(timeout=0.2)
-
-    if latest is None:
+    if not has_data or latest is None:
         return None
 
     freq, realz, imagz, timestamps, meta = latest
