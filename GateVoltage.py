@@ -48,6 +48,22 @@ SETTINGS_FILE = Path("gate_settings.json")
 STATUS_PUSH_TIMEOUT_S = 2.0
 
 
+def _sanitize_series(values: object) -> object:
+    if not isinstance(values, list):
+        return values
+    cleaned = []
+    for val in values:
+        try:
+            num = float(val)
+            if not math.isfinite(num):
+                cleaned.append(None)
+            else:
+                cleaned.append(num)
+        except Exception:
+            cleaned.append(None)
+    return cleaned
+
+
 def preview_live_plot(plotter: SweepPlotter, sweeps: int = 6, points: int = 60, pause_s: float = 0.2) -> None:
     prev_real: List[float] | None = None
     prev_imag: List[float] | None = None
@@ -203,7 +219,10 @@ def push_plot_update(url: str | None, password: str | None, payload: Dict[str, o
     target = parsed.geturl().rstrip("/")
     if not target.endswith("/plot_update"):
         target = f"{target}/plot_update"
-    body = json.dumps(payload).encode("utf-8")
+    safe_payload = dict(payload)
+    safe_payload["real"] = _sanitize_series(payload.get("real"))
+    safe_payload["imag"] = _sanitize_series(payload.get("imag"))
+    body = json.dumps(safe_payload, allow_nan=False).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
         "Content-Length": str(len(body)),

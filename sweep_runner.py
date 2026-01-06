@@ -131,6 +131,28 @@ def _extract_chunk_with_meta(
     return chunk, freq, realz, imagz, timestamps, meta
 
 
+def _slice_to_count(
+    realz: np.ndarray,
+    imagz: np.ndarray,
+    meta: Optional[Dict[str, np.ndarray]] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    if not meta:
+        return realz, imagz
+    count_arr = meta.get("samplecount")
+    if count_arr is None or count_arr.size == 0:
+        count_arr = meta.get("count")
+    if count_arr is None or count_arr.size == 0:
+        return realz, imagz
+    try:
+        n = int(np.ravel(count_arr)[-1])
+    except Exception:
+        return realz, imagz
+    if n <= 0:
+        return realz[:0], imagz[:0]
+    n = min(n, realz.size, imagz.size)
+    return realz[:n], imagz[:n]
+
+
 def collect_impedance_sweep(daq) -> Optional[Dict[str, list[float]]]:
     """
     Run a single impedance sweep and return the parsed data.
@@ -193,8 +215,9 @@ def stream_impedance_sweep(
             chunk, freq, realz, imagz, timestamps, meta = parsed
             latest = (freq, realz, imagz, timestamps, meta)
             has_data = True
-            real_list = realz.tolist()
-            imag_list = imagz.tolist()
+            real_plot, imag_plot = _slice_to_count(realz, imagz, meta)
+            real_list = real_plot.tolist()
+            imag_list = imag_plot.tolist()
             plotter.update(
                 real_list,
                 imag_list,
@@ -211,8 +234,9 @@ def stream_impedance_sweep(
         _, freq, realz, imagz, timestamps, meta = parsed
         latest = (freq, realz, imagz, timestamps, meta)
         has_data = True
-        real_list = realz.tolist()
-        imag_list = imagz.tolist()
+        real_plot, imag_plot = _slice_to_count(realz, imagz, meta)
+        real_list = real_plot.tolist()
+        imag_list = imag_plot.tolist()
         plotter.update(
             real_list,
             imag_list,
