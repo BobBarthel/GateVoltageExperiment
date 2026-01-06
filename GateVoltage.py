@@ -209,7 +209,6 @@ def push_status_update(url: str | None, password: str | None, payload: Dict[str,
         headers["Authorization"] = f"Bearer {password}"
     request = urllib.request.Request(target, data=body, headers=headers, method="POST")
     try:
-        print(f"[status] POST {target} payload_keys={list(payload.keys())}")
         with urllib.request.urlopen(request, timeout=STATUS_PUSH_TIMEOUT_S):
             return
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
@@ -239,10 +238,6 @@ def push_plot_update(url: str | None, password: str | None, payload: Dict[str, o
         headers["Authorization"] = f"Bearer {password}"
     request = urllib.request.Request(target, data=body, headers=headers, method="POST")
     try:
-        print(
-            f"[plot] POST {target} id={payload.get('id')} session={payload.get('session')} "
-            f"points={len(payload.get('real', [])) if isinstance(payload.get('real'), list) else 'n/a'}"
-        )
         with urllib.request.urlopen(request, timeout=STATUS_PUSH_TIMEOUT_S):
             return
     except urllib.error.HTTPError as exc:
@@ -425,7 +420,6 @@ def run_single_sweep_at_voltage(
         last_push_len = available
         real = real[:available]
         imag = imag[:available]
-        print(f"[plot] streaming points={len(real)} id={sweep_id}")
         push_plot_update(
             status_config.get("url"),
             status_config.get("password"),
@@ -548,7 +542,6 @@ def run_voltage_block(
             last_push_len = available
             real = real[:available]
             imag = imag[:available]
-            print(f"[plot] streaming points={len(real)} id={sweep_id}")
             push_plot_update(
                 status_config.get("url"),
                 status_config.get("password"),
