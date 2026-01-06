@@ -237,7 +237,16 @@ def push_plot_update(url: str | None, password: str | None, payload: Dict[str, o
         )
         with urllib.request.urlopen(request, timeout=STATUS_PUSH_TIMEOUT_S):
             return
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="ignore")
+        except Exception:
+            detail = ""
+        extra = f" body={detail}" if detail else ""
+        print(f"[plot] POST failed to {target}: {exc}{extra}")
+        return
+    except (urllib.error.URLError, TimeoutError) as exc:
         print(f"[plot] POST failed to {target}: {exc}")
         return
 
