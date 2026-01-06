@@ -105,7 +105,7 @@ const plotsPage = `<!doctype html>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: "Helvetica Neue", Arial, sans-serif; background: #0b1120; color: #e2e8f0; }
-    header { padding: 18px 24px; border-bottom: 1px solid #1f2937; background: rgba(15, 23, 42, 0.8); display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    header { padding: 18px 24px; border-bottom: 1px solid #1f2937; background: rgba(15, 23, 42, 0.85); display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
     h1 { margin: 0; font-size: 20px; letter-spacing: 0.4px; }
     main { display: grid; grid-template-columns: 260px 1fr; min-height: calc(100vh - 70px); }
     .panel { padding: 18px; border-right: 1px solid #1f2937; background: rgba(15, 23, 42, 0.6); }
@@ -117,6 +117,12 @@ const plotsPage = `<!doctype html>
     .controls input { padding: 6px 8px; border-radius: 8px; border: 1px solid #1f2937; background: #0f172a; color: #e2e8f0; }
     .controls button { padding: 6px 10px; border-radius: 8px; border: 1px solid #1f2937; background: #1f2937; color: #e2e8f0; cursor: pointer; }
     .controls label { font-size: 13px; color: #cbd5f5; display: inline-flex; align-items: center; gap: 6px; }
+    .range-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 8px; padding: 10px 12px; border-radius: 12px; border: 1px solid #1f2937; background: rgba(15, 23, 42, 0.6); }
+    .range-controls input { width: 88px; }
+    .range-controls .tiny { width: 64px; }
+    .range-controls button { padding: 6px 10px; }
+    .range-controls .group { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .range-controls .pill { padding: 2px 8px; border-radius: 999px; border: 1px solid #1f2937; background: #111827; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; }
     .chart-wrap { padding: 18px; }
     canvas { width: 100%; max-height: 78vh; background: #0f172a; border-radius: 12px; border: 1px solid #1f2937; }
     .meta { font-size: 12px; color: #94a3b8; margin-top: 8px; }
@@ -131,6 +137,31 @@ const plotsPage = `<!doctype html>
       <label><input id="overlay" type="checkbox">Overlay last</label>
       <input id="overlay-count" type="number" min="1" value="3" style="width:70px">
       <button id="refresh">Refresh</button>
+    </div>
+    <div class="range-controls">
+      <span class="pill">View</span>
+      <div class="group">
+        <span>X</span>
+        <input id="xmin" type="number" placeholder="min">
+        <input id="xmax" type="number" placeholder="max">
+      </div>
+      <div class="group">
+        <span>Y</span>
+        <input id="ymin" type="number" placeholder="min">
+        <input id="ymax" type="number" placeholder="max">
+      </div>
+      <div class="group">
+        <button id="apply-range">Apply</button>
+        <button id="reset-range">Reset</button>
+      </div>
+      <span class="pill">Pan</span>
+      <div class="group">
+        <input id="pan-step" class="tiny" type="number" value="50">
+        <button id="pan-left">◀</button>
+        <button id="pan-right">▶</button>
+        <button id="pan-up">▲</button>
+        <button id="pan-down">▼</button>
+      </div>
     </div>
   </header>
   <main>
@@ -150,6 +181,11 @@ const plotsPage = `<!doctype html>
     const meta = document.getElementById('meta');
     const overlayToggle = document.getElementById('overlay');
     const overlayCount = document.getElementById('overlay-count');
+    const xminInput = document.getElementById('xmin');
+    const xmaxInput = document.getElementById('xmax');
+    const yminInput = document.getElementById('ymin');
+    const ymaxInput = document.getElementById('ymax');
+    const panStepInput = document.getElementById('pan-step');
     const saved = localStorage.getItem('plotToken') || '';
     tokenInput.value = saved;
 
@@ -264,6 +300,64 @@ const plotsPage = `<!doctype html>
 
     setInterval(fetchPlots, 1000);
     fetchPlots();
+
+    function applyRange() {
+      if (!chart) return;
+      const xMin = xminInput.value === '' ? undefined : Number(xminInput.value);
+      const xMax = xmaxInput.value === '' ? undefined : Number(xmaxInput.value);
+      const yMin = yminInput.value === '' ? undefined : Number(yminInput.value);
+      const yMax = ymaxInput.value === '' ? undefined : Number(ymaxInput.value);
+      chart.options.scales.x.min = xMin;
+      chart.options.scales.x.max = xMax;
+      chart.options.scales.y.min = yMin;
+      chart.options.scales.y.max = yMax;
+      chart.update();
+    }
+
+    function resetRange() {
+      if (!chart) return;
+      delete chart.options.scales.x.min;
+      delete chart.options.scales.x.max;
+      delete chart.options.scales.y.min;
+      delete chart.options.scales.y.max;
+      xminInput.value = '';
+      xmaxInput.value = '';
+      yminInput.value = '';
+      ymaxInput.value = '';
+      chart.update();
+    }
+
+    function getStep() {
+      const raw = Number(panStepInput.value);
+      return Number.isFinite(raw) && raw !== 0 ? raw : 50;
+    }
+
+    function pan(dx, dy) {
+      if (!chart) return;
+      const xScale = chart.scales.x;
+      const yScale = chart.scales.y;
+      const xMin = chart.options.scales.x.min ?? xScale.min;
+      const xMax = chart.options.scales.x.max ?? xScale.max;
+      const yMin = chart.options.scales.y.min ?? yScale.min;
+      const yMax = chart.options.scales.y.max ?? yScale.max;
+      if (![xMin, xMax, yMin, yMax].every(Number.isFinite)) return;
+      chart.options.scales.x.min = xMin + dx;
+      chart.options.scales.x.max = xMax + dx;
+      chart.options.scales.y.min = yMin + dy;
+      chart.options.scales.y.max = yMax + dy;
+      xminInput.value = chart.options.scales.x.min.toFixed(2);
+      xmaxInput.value = chart.options.scales.x.max.toFixed(2);
+      yminInput.value = chart.options.scales.y.min.toFixed(2);
+      ymaxInput.value = chart.options.scales.y.max.toFixed(2);
+      chart.update();
+    }
+
+    document.getElementById('apply-range').onclick = applyRange;
+    document.getElementById('reset-range').onclick = resetRange;
+    document.getElementById('pan-left').onclick = () => pan(-getStep(), 0);
+    document.getElementById('pan-right').onclick = () => pan(getStep(), 0);
+    document.getElementById('pan-up').onclick = () => pan(0, getStep());
+    document.getElementById('pan-down').onclick = () => pan(0, -getStep());
   </script>
 </body>
 </html>`;
