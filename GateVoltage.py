@@ -69,7 +69,6 @@ def preview_live_plot(plotter: SweepPlotter, sweeps: int = 6, points: int = 60, 
         prev_real = real
         prev_imag = imag
         plotter.pause(pause_s)
-        plotter.record_sweep(real, imag)
 
 
 class NullPlotter:
@@ -86,8 +85,6 @@ class NullPlotter:
     def pause(self, seconds: float) -> None:
         return
 
-    def record_sweep(self, real: Sequence[float], imag: Sequence[float]) -> None:
-        return
 
 
 def preview_server_plots(
@@ -191,8 +188,8 @@ def push_status_update(url: str | None, password: str | None, payload: Dict[str,
         print(f"[status] POST {target} payload_keys={list(payload.keys())}")
         with urllib.request.urlopen(request, timeout=STATUS_PUSH_TIMEOUT_S):
             return
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
-        print(f"[status] POST failed to {target}")
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        print(f"[status] POST failed to {target}: {exc}")
         return
 
 
@@ -221,8 +218,8 @@ def push_plot_update(url: str | None, password: str | None, payload: Dict[str, o
         )
         with urllib.request.urlopen(request, timeout=STATUS_PUSH_TIMEOUT_S):
             return
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
-        print(f"[plot] POST failed to {target}")
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        print(f"[plot] POST failed to {target}: {exc}")
         return
 
 
@@ -380,16 +377,16 @@ def run_single_sweep_at_voltage(
     )
     sweep_id = f"{run_id}_single"
     plots_enabled = bool(status_config and status_config.get("plots_enabled", True) and status_config.get("url"))
-    last_push = 0.0
+    last_push_len = 0
 
     def live_plot_cb(real: List[float], imag: List[float]) -> None:
-        nonlocal last_push
+        nonlocal last_push_len
         if not plots_enabled:
             return
-        now = time.time()
-        if now - last_push < 0.5:
+        if len(real) - last_push_len < 5:
             return
-        last_push = now
+        last_push_len = len(real)
+        print(f"[plot] streaming points={len(real)} id={sweep_id}")
         push_plot_update(
             status_config.get("url"),
             status_config.get("password"),
@@ -441,7 +438,6 @@ def run_single_sweep_at_voltage(
         None,
         title=f"Single sweep at {voltage:g} V",
     )
-    plotter.record_sweep(sweep_data["Re_Z_Ohm"], sweep_data["Im_Z_Ohm"])
     print_order(order)
     print("Single sweep complete.")
 
@@ -501,16 +497,16 @@ def run_voltage_block(
             )
 
         sweep_id = f"{run_id}_step{step_index + 1}_sweep{sweep_count + 1}"
-        last_push = 0.0
+        last_push_len = 0
 
         def live_plot_cb(real: List[float], imag: List[float]) -> None:
-            nonlocal last_push
+            nonlocal last_push_len
             if not plots_enabled:
                 return
-            now = time.time()
-            if now - last_push < 0.5:
+            if len(real) - last_push_len < 5:
                 return
-            last_push = now
+            last_push_len = len(real)
+            print(f"[plot] streaming points={len(real)} id={sweep_id}")
             push_plot_update(
                 status_config.get("url"),
                 status_config.get("password"),
@@ -558,7 +554,6 @@ def run_voltage_block(
                     "imag": sweep_data["Im_Z_Ohm"],
                 },
             )
-        plotter.record_sweep(sweep_data["Re_Z_Ohm"], sweep_data["Im_Z_Ohm"])
         latest_data = sweep_data
         prev_data = sweep_data
 
