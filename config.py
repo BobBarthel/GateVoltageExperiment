@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from typing import List
+from typing import List, Sequence
 
 import ZurichInstruments as zi
 
@@ -13,6 +13,9 @@ class ExperimentOptions:
     repetitions: int
     alternate_with_zero: bool
     single_sweep: bool
+    voltage_times_min: List[float] | None = None
+    zero_time_leading_min: float | None = None
+    zero_times_min: List[float] | None = None
 
 
 @dataclass
@@ -126,3 +129,70 @@ def parse_voltage_list(raw: str) -> List[float]:
     if not tokens:
         raise ValueError("at least one voltage is required")
     return [float(tok) for tok in tokens]
+
+
+def parse_float_list(raw: str) -> List[float]:
+    """Parse comma/space separated float values."""
+    cleaned = raw.translate({ord(c): " " for c in "[]()"})
+    tokens = [tok for tok in cleaned.replace(",", " ").split() if tok]
+    if not tokens:
+        raise ValueError("at least one value is required")
+    return [float(tok) for tok in tokens]
+
+
+def build_voltage_schedule(
+    voltages: Sequence[float],
+    repetitions: int,
+    alternate_with_zero: bool,
+    voltage_time_min: float,
+    voltage_times_min: Sequence[float] | None = None,
+    zero_time_leading_min: float | None = None,
+    zero_times_min: Sequence[float] | None = None,
+) -> List[dict]:
+    """
+    Build voltage steps with per-step timings in minutes.
+    Returns a list of dicts: {"voltage": float, "time_min": float, "kind": str}.
+    """
+    if repetitions < 1:
+        raise ValueError("repetitions must be >= 1")
+    if not voltages:
+        raise ValueError("voltages list cannot be empty")
+
+    base_voltages = [float(v) for v in voltages]
+
+    def _validate_time_list(name: str, values: Sequence[float] | None) -> List[float] | None:
+        if values is None:
+            return None
+        cleaned = [float(v) for v in values]
+        if len(cleaned) != len(base_voltages):
+            raise ValueError(f"{name} must have {len(base_voltages)} entries (one per voltage).")
+        for val in cleaned:
+            if val < 0:
+                raise ValueError(f"{name} entries must be >= 0.")
+        return cleaned
+
+    voltage_times = _validate_time_list("voltage_times_min", voltage_times_min)
+    zero_times = _validate_time_list("zero_times_min", zero_times_min)
+    if zero_time_leading_min is not None and zero_time_leading_min < 0:
+        raise ValueError("zero_time_leading_min must be >= 0.")
+
+    def time_for_voltage(idx: int) -> float:
+        return voltage_times[idx] if voltage_times is not None else voltage_time_min
+
+    def time_for_zero(idx: int | None = None, *, leading: bool = False) -> float:
+        if leading:
+            return zero_time_leading_min if zero_time_leading_min is not None else voltage_time_min
+        if zero_times is not None and idx is not None:
+            return zero_times[idx]
+        return voltage_time_min
+
+    schedule: List[dict] = []
+    if alternate_with_zero:
+        schedule.append({"voltage": 0.0, "time_min": time_for_zero(leading=True), "kind": "leading_zero"})
+
+    for _ in range(repetitions):
+        for idx, voltage in enumerate(base_voltages):
+            schedule.append({"voltage": voltage, "time_min": time_for_voltage(idx), "kind": "voltage"})
+            if alternate_with_zero:
+                schedule.append({"voltage": 0.0, "time_min": time_for_zero(idx), "kind": "zero_after"})
+    return schedule

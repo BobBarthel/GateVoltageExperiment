@@ -4,6 +4,7 @@ import sys
 import time
 from pathlib import Path
 import re
+import os
 try:
     import termios
     import tty
@@ -17,7 +18,14 @@ except ImportError:
     msvcrt = None
 from typing import Sequence
 
-from config import ExperimentOptions, GateSourceSettings, InstrumentSettings, parse_voltage_list
+from config import (
+    ExperimentOptions,
+    GateSourceSettings,
+    InstrumentSettings,
+    build_voltage_schedule,
+    parse_float_list,
+    parse_voltage_list,
+)
 
 
 class Colors:
@@ -38,8 +46,8 @@ class Colors:
 
 COL = Colors()
 HEADER_ART = None
-UI_VERSION = "v0.0.3"
-UI_VERSION_DATE = "2026-01-06"  # set manually to match the build/version date
+UI_VERSION = "v0.0.4"
+UI_VERSION_DATE = "2026-01-16"  # set manually to match the build/version date
 SIDE_PAD = 20  # spaces (~2 tabs) to inset content from both sides
 
 
@@ -64,16 +72,20 @@ def _format_duration(seconds: float) -> str:
 
 def _estimate_steps_and_time(options: ExperimentOptions) -> tuple[int, float]:
     """Estimate total steps and seconds based on options."""
-    volt_count = len(options.voltages)
-    reps = max(0, int(options.repetitions))
-    if volt_count == 0 or reps == 0:
+    try:
+        schedule = build_voltage_schedule(
+            options.voltages,
+            options.repetitions,
+            options.alternate_with_zero,
+            options.voltage_time_min,
+            options.voltage_times_min,
+            options.zero_time_leading_min,
+            options.zero_times_min,
+        )
+    except ValueError:
         return 0, 0.0
-    if options.alternate_with_zero:
-        steps = 2 * volt_count * reps + 1
-    else:
-        steps = volt_count * reps
-    total_seconds = steps * options.voltage_time_min * 60.0
-    return steps, total_seconds
+    total_seconds = sum(step["time_min"] * 60.0 for step in schedule)
+    return len(schedule), total_seconds
 
 
 def _highlight_hotkeys(chunks: list[str]) -> str:
@@ -138,6 +150,126 @@ def _set_voltages(options: ExperimentOptions, prompt):
     except ValueError as exc:
         print(COL.wrap(f"Invalid voltage list: {exc}", COL.yellow))
         time.sleep(0.7)
+
+
+def _format_optional_list(values: Sequence[float] | None) -> str:
+    if not values:
+        return "(use default)"
+    return ", ".join(f"{v:g}" for v in values)
+
+
+def _format_schedule_table(options: ExperimentOptions) -> list[str]:
+    try:
+        schedule = build_voltage_schedule(
+            options.voltages,
+            options.repetitions,
+            options.alternate_with_zero,
+            options.voltage_time_min,
+            options.voltage_times_min,
+            options.zero_time_leading_min,
+            options.zero_times_min,
+        )
+    except ValueError as exc:
+        return [f"(invalid schedule: {exc})"]
+    if not schedule:
+        return ["(none)"]
+
+    rows = []
+    for idx, step in enumerate(schedule, start=1):
+        rows.append([str(idx), f"{step['voltage']:g}", f"{step['time_min']:g}"])
+
+    headers = ["Step", "Voltage (V)", "Time (min)"]
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    def line(sep: str = "-") -> str:
+        return "+" + "+".join(sep * (w + 2) for w in widths) + "+"
+
+    out = [line()]
+    out.append("|" + "|".join(f" {headers[i].ljust(widths[i])} " for i in range(len(headers))) + "|")
+    out.append(line())
+    for row in rows:
+        out.append("|" + "|".join(f" {row[i].rjust(widths[i])} " for i in range(len(row))) + "|")
+    out.append(line())
+    return out
+
+
+def _prompt_optional_float(label: str, current: float | None) -> float | None:
+    current_label = "" if current is None else f"{current:g}"
+    raw = input(f"{label} [{current_label or 'default'}]: ").strip()
+    if raw == "":
+        return current
+    if raw.lower() in ("default", "none", "clear"):
+        return None
+    try:
+        return float(raw)
+    except Exception:
+        print(COL.wrap("Invalid input, keeping current.", COL.yellow))
+        time.sleep(0.7)
+        return current
+
+
+def _prompt_optional_list(label: str, current: Sequence[float] | None) -> list[float] | None:
+    current_label = "" if not current else ",".join(f"{v:g}" for v in current)
+    raw = input(f"{label} [{current_label or 'default'}]: ").strip()
+    if raw == "":
+        return list(current) if current else None
+    if raw.lower() in ("default", "none", "clear"):
+        return None
+    try:
+        return parse_float_list(raw)
+    except ValueError as exc:
+        print(COL.wrap(f"Invalid list: {exc}", COL.yellow))
+        time.sleep(0.7)
+        return list(current) if current else None
+
+
+def _render_schedule_table(options: ExperimentOptions) -> None:
+    try:
+        schedule = build_voltage_schedule(
+            options.voltages,
+            options.repetitions,
+            options.alternate_with_zero,
+            options.voltage_time_min,
+            options.voltage_times_min,
+            options.zero_time_leading_min,
+            options.zero_times_min,
+        )
+    except ValueError as exc:
+        print(COL.wrap(f"Cannot build schedule: {exc}", COL.red))
+        input("Press Enter to return...")
+        return
+
+    if not schedule:
+        print(COL.wrap("No schedule steps to display.", COL.yellow))
+        input("Press Enter to return...")
+        return
+
+    rows = []
+    for idx, step in enumerate(schedule, start=1):
+        rows.append([str(idx), f"{step['voltage']:g}", f"{step['time_min']:g}"])
+
+    headers = ["Step", "Voltage (V)", "Time (min)"]
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    def line(sep: str = "-") -> str:
+        return "+" + "+".join(sep * (w + 2) for w in widths) + "+"
+
+    print(line())
+    header_line = "|" + "|".join(f" {headers[i].ljust(widths[i])} " for i in range(len(headers))) + "|"
+    print(header_line)
+    print(line())
+    for row in rows:
+        print("|" + "|".join(f" {row[i].rjust(widths[i])} " for i in range(len(row))) + "|")
+    print(line())
+    total_min = sum(step["time_min"] for step in schedule)
+    print(f"Total: {total_min:g} min, {len(schedule)} steps")
+    input("Press Enter to return...")
 
 
 def _toggle_scan_direction(settings: InstrumentSettings, prompt_bool) -> None:
@@ -234,8 +366,16 @@ def print_run_options(
     print(f"Output directory:   {output_dir}")
     print(f"Device ID:           {COL.wrap(settings.device_id, COL.green)}")
     print(f"Voltages (input):    {COL.wrap(str(options.voltages), COL.green)}")
+    print("Schedule:")
+    for line in _format_schedule_table(options):
+        print(f"  {COL.wrap(line, COL.green)}")
     print(f"Voltage order:       {COL.wrap(', '.join(f'{v:g}' for v in order), COL.green)}")
-    print(f"Voltage time:        {options.voltage_time_min} min per step")
+    print(f"Default step time:   {options.voltage_time_min} min per step")
+    print(f"Per-voltage times:   {_format_optional_list(options.voltage_times_min)} min")
+    if options.alternate_with_zero:
+        lead_zero = f"{options.zero_time_leading_min:g}" if options.zero_time_leading_min is not None else "(use default)"
+        print(f"Leading zero time:   {lead_zero} min")
+        print(f"Zero-after times:    {_format_optional_list(options.zero_times_min)} min")
     print(f"Repetitions:         {options.repetitions}")
     print(f"Alternate with zero: {options.alternate_with_zero}")
     print(f"Single sweep mode:   {options.single_sweep}")
@@ -300,10 +440,40 @@ def settings_dashboard(
         },
         {
             "kind": "field",
-            "label": "Voltage time (min)",
+            "label": "Default step time (min)",
             "getter": lambda: options.voltage_time_min,
             "setter": lambda: setattr(
-                options, "voltage_time_min", prompt("Voltage time per step (min)", float, options.voltage_time_min)
+                options, "voltage_time_min", prompt("Default time per step (min)", float, options.voltage_time_min)
+            ),
+        },
+        {
+            "kind": "field",
+            "label": "Per-voltage times (min list)",
+            "getter": lambda: _format_optional_list(options.voltage_times_min),
+            "setter": lambda: setattr(
+                options,
+                "voltage_times_min",
+                _prompt_optional_list("Per-voltage times (min, list or 'default')", options.voltage_times_min),
+            ),
+        },
+        {
+            "kind": "field",
+            "label": "Leading zero time (min)",
+            "getter": lambda: options.zero_time_leading_min if options.zero_time_leading_min is not None else "(use default)",
+            "setter": lambda: setattr(
+                options,
+                "zero_time_leading_min",
+                _prompt_optional_float("Leading zero time (min or 'default')", options.zero_time_leading_min),
+            ),
+        },
+        {
+            "kind": "field",
+            "label": "Zero-after times (min list)",
+            "getter": lambda: _format_optional_list(options.zero_times_min),
+            "setter": lambda: setattr(
+                options,
+                "zero_times_min",
+                _prompt_optional_list("Zero-after times (min, list or 'default')", options.zero_times_min),
             ),
         },
         {
@@ -466,6 +636,7 @@ def settings_dashboard(
         {"kind": "action", "label": "List VISA resources", "action": "list_visa"},
         {"kind": "action", "label": "Preview live plot (fake data)", "action": "preview"},
         {"kind": "action", "label": "Preview server plots (fake data)", "action": "preview_server"},
+        {"kind": "action", "label": "Show timing schedule table", "action": "schedule"},
         {"kind": "action", "label": "Start measurement", "action": "start"},
         {"kind": "action", "label": "Run single sweep test", "action": "single"},
         {"kind": "action", "label": "Quit", "action": "quit"},
@@ -488,6 +659,7 @@ def settings_dashboard(
         base_indent = max(0, left_idx if right_idx >= left_idx else 0)
         content_width = max(0, header_width - 2 * SIDE_PAD) if header_width > 0 else 0
         est_steps, est_seconds = _estimate_steps_and_time(options)
+        debug_enabled = os.environ.get("DEBUG", "").strip() not in ("", "0", "false", "False")
 
         def render_header_meta() -> None:
             if header_width <= 0:
@@ -575,6 +747,8 @@ def settings_dashboard(
         )
         if status_msg:
             render_line(COL.wrap(status_msg, COL.yellow))
+        if debug_enabled:
+            render_line(COL.wrap("DEBUG MODE: Instruments disabled, synthetic sweeps active.", COL.yellow))
         render_line()
         
 
@@ -605,6 +779,10 @@ def settings_dashboard(
             if entry["kind"] == "field":
                 entry["setter"]()
             elif entry["kind"] == "action":
+                if entry["action"] == "schedule":
+                    clear_screen()
+                    _render_schedule_table(options)
+                    continue
                 return options, settings, gate_settings, run_config, entry["action"]
         elif key in ("q", "\x1b"):
             return options, settings, gate_settings, run_config, "quit"
