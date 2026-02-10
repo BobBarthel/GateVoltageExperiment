@@ -156,6 +156,7 @@ class Keithley2450GateSource:
     def set_voltage(self, voltage: float) -> None:
         smu = self._require_smu()
         smu.source_voltage = voltage
+        smu.compliance_current = 0.1 
         _ensure_no_errors(smu, f"set source voltage to {voltage}")
 
     def set_voltage_and_wait(self, voltage: float, tolerance_v: float, timeout_s: float = 10.0) -> tuple[float, float]:
@@ -164,6 +165,7 @@ class Keithley2450GateSource:
         Returns (voltage, current) measured when the condition is met (or timeout).
         """
         self.set_voltage(voltage)
+        
         start = time.time()
         last_v, last_i = self.read_voltage_current()
         while abs(last_v - voltage) > tolerance_v:

@@ -253,8 +253,23 @@ def save_state(
         pass
 
 
+_STATUS_UPDATES_DISABLED = False
+_STATUS_UPDATES_DISABLED_REASON = ""
+
+
+def _disable_status_updates(reason: str) -> None:
+    global _STATUS_UPDATES_DISABLED, _STATUS_UPDATES_DISABLED_REASON
+    if _STATUS_UPDATES_DISABLED:
+        return
+    _STATUS_UPDATES_DISABLED = True
+    _STATUS_UPDATES_DISABLED_REASON = reason
+    print(f"[status] disabling status/plot updates for this run: {reason}")
+
+
 def push_status_update(url: str | None, password: str | None, payload: Dict[str, object]) -> None:
     """POST the latest sweep status to the Node dashboard; errors are ignored."""
+    if _STATUS_UPDATES_DISABLED:
+        return
     if not url:
         return
     parsed = urllib.parse.urlparse(url if "://" in url else f"http://{url}")
@@ -275,12 +290,15 @@ def push_status_update(url: str | None, password: str | None, payload: Dict[str,
         with urllib.request.urlopen(request, timeout=STATUS_PUSH_TIMEOUT_S):
             return
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+        _disable_status_updates(str(exc))
         print(f"[status] POST failed to {target}: {exc}")
         return
 
 
 def push_plot_update(url: str | None, password: str | None, payload: Dict[str, object]) -> None:
     """POST the latest sweep plot data to the Node dashboard; errors are ignored."""
+    if _STATUS_UPDATES_DISABLED:
+        return
     if not url:
         return
     parsed = urllib.parse.urlparse(url if "://" in url else f"http://{url}")
@@ -304,6 +322,7 @@ def push_plot_update(url: str | None, password: str | None, payload: Dict[str, o
         with urllib.request.urlopen(request, timeout=STATUS_PUSH_TIMEOUT_S):
             return
     except urllib.error.HTTPError as exc:
+        _disable_status_updates(str(exc))
         detail = ""
         try:
             detail = exc.read().decode("utf-8", errors="ignore")
@@ -313,6 +332,7 @@ def push_plot_update(url: str | None, password: str | None, payload: Dict[str, o
         print(f"[plot] POST failed to {target}: {exc}{extra}")
         return
     except (urllib.error.URLError, TimeoutError) as exc:
+        _disable_status_updates(str(exc))
         print(f"[plot] POST failed to {target}: {exc}")
         return
 
